@@ -1,0 +1,16 @@
+apiVersion: flink.apache.org/v1beta1
+kind: FlinkSessionJob
+metadata:
+  name: scpro-elmis-dispensations-pipeline
+  namespace: flink-jobs
+spec:
+  deploymentName: session-cluster
+  job:
+    jarURI: JAR_HTTP_URL
+    entryClass: zm.gov.moh.hie.scp.StreamingJob
+    parallelism: 2
+    upgradeMode: stateless
+    state: running
+    # arguments:
+    #   - "--kafka.bootstrap.servers=<your-broker>"
+    #   - "--kafka.topic=<your-topic>"
