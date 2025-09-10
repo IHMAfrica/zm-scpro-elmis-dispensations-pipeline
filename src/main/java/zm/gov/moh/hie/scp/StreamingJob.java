@@ -78,11 +78,17 @@ public class StreamingJob {
                 })
                 .name("filter-invalid-records");
 
-        // Add JdbcSink with batch configuration
+        // Add JdbcSink with batch configuration and UPSERT for unique ref_prescription constraint
         @SuppressWarnings("deprecation")
         var sink = JdbcSink.sink(
                 "INSERT INTO " + cfg.postgresTable + " (hmis_code, drug_count, ref_prescription) " +
-                        "VALUES (?, ?, ?)",
+                        "VALUES (?, ?, ?) " +
+                        "ON CONFLICT (ref_prescription) " +
+                        "DO UPDATE SET " +
+                        "hmis_code = EXCLUDED.hmis_code, " +
+                        "drug_count = EXCLUDED.drug_count, " +
+                        "date = CURRENT_DATE, " +
+                        "time = CURRENT_TIME::time(0)",
                 (PreparedStatement statement, DispensationRecord record) -> {
                     statement.setString(1, record.hmisCode);
                     if (record.drugCount != null) {
@@ -98,10 +104,10 @@ public class StreamingJob {
                         .withMaxRetries(5)
                         .build(),
                 new JdbcConnectionOptions.JdbcConnectionOptionsBuilder()
-                        .withUrl(cfg.postgresUrl)
+                        .withUrl(cfg.jdbcUrl)
                         .withDriverName("org.postgresql.Driver")
-                        .withUsername(cfg.postgresUser)
-                        .withPassword(cfg.postgresPassword)
+                        .withUsername(cfg.jdbcUser)
+                        .withPassword(cfg.jdbcPassword)
                         .build()
         );
         records.addSink(sink).name("postgres-sink");

@@ -21,9 +21,9 @@ public class Config {
     public final String kafkaSaslUsername;
     public final String kafkaSaslPassword;
 
-    public final String postgresUrl;
-    public final String postgresUser;
-    public final String postgresPassword;
+    public final String jdbcUrl;
+    public final String jdbcUser;
+    public final String jdbcPassword;
     public final String postgresTable;
 
     private Config(
@@ -34,9 +34,9 @@ public class Config {
             String kafkaSaslMechanism,
             String kafkaSaslUsername,
             String kafkaSaslPassword,
-            String postgresUrl,
-            String postgresUser,
-            String postgresPassword,
+            String jdbcUrl,
+            String jdbcUser,
+            String jdbcPassword,
             String postgresTable
     ) {
         this.kafkaBootstrapServers = kafkaBootstrapServers;
@@ -45,31 +45,31 @@ public class Config {
         this.kafkaSecurityProtocol = kafkaSecurityProtocol;
         this.kafkaSaslMechanism = kafkaSaslMechanism;
         this.kafkaSaslUsername = kafkaSaslUsername;
-        this.kafkaSaslPassword = safeValue(kafkaSaslPassword);
-        this.postgresUrl = postgresUrl;
-        this.postgresUser = postgresUser;
-        this.postgresPassword = postgresPassword;
+        this.kafkaSaslPassword = jdbcPasswordIfNull(kafkaSaslPassword);
+        this.jdbcUrl = jdbcUrl;
+        this.jdbcUser = jdbcUser;
+        this.jdbcPassword = jdbcPassword;
         this.postgresTable = postgresTable;
     }
 
-    private String safeValue(String value) {
+    private String jdbcPasswordIfNull(String value) {
         return value == null ? "" : value;
     }
 
     public static Config fromEnvAndArgs(String[] args) {
         Map<String, String> params = new HashMap<>();
 
-        // 1) defaults (dispensation-specific defaults)
+        // 1) defaults (current hard-coded ones kept as defaults, but can be overridden)
         params.put("kafka.bootstrap.servers", "154.120.216.119:9093,102.23.120.153:9093,102.23.123.251:9093");
         params.put("kafka.topic", "dispensations");
-        params.put("kafka.group.id", "dispensations-consumer");
+        params.put("kafka.group.id", "flink-scpro-elmis-dispensations-consumer");
         params.put("kafka.security.protocol", "SASL_PLAINTEXT");
         params.put("kafka.sasl.mechanism", "SCRAM-SHA-256");
         params.put("kafka.sasl.username", "admin");
         params.put("kafka.sasl.password", "075F80FED7C6");
-        params.put("postgres.url", "jdbc:postgresql://localhost:5432/hie_manager");
-        params.put("postgres.user", "postgres");
-        params.put("postgres.password", "postgres");
+        params.put("jdbc.url", "jdbc:postgresql://db-04.smartcare.com:35616/hie_manager");
+        params.put("jdbc.user", "postgres");
+        params.put("jdbc.password", "N3vvDbPass4IHM_2025!");
         params.put("postgres.table", "crt.dispensation");
 
         // 2) environment variables (upper snake)
@@ -80,9 +80,9 @@ public class Config {
         overlayIfPresent(params, "KAFKA_SASL_MECHANISM", "kafka.sasl.mechanism");
         overlayIfPresent(params, "KAFKA_SASL_USERNAME", "kafka.sasl.username");
         overlayIfPresent(params, "KAFKA_SASL_PASSWORD", "kafka.sasl.password");
-        overlayIfPresent(params, "POSTGRES_URL", "postgres.url");
-        overlayIfPresent(params, "POSTGRES_USER", "postgres.user");
-        overlayIfPresent(params, "POSTGRES_PASSWORD", "postgres.password");
+        overlayIfPresent(params, "JDBC_URL", "jdbc.url");
+        overlayIfPresent(params, "JDBC_USER", "jdbc.user");
+        overlayIfPresent(params, "JDBC_PASSWORD", "jdbc.password");
         overlayIfPresent(params, "POSTGRES_TABLE", "postgres.table");
 
         // 3) command-line args in form --key=value
@@ -105,9 +105,9 @@ public class Config {
                 params.get("kafka.sasl.mechanism"),
                 params.get("kafka.sasl.username"),
                 params.get("kafka.sasl.password"),
-                params.get("postgres.url"),
-                params.get("postgres.user"),
-                params.get("postgres.password"),
+                params.get("jdbc.url"),
+                params.get("jdbc.user"),
+                params.get("jdbc.password"),
                 params.get("postgres.table")
         );
 
@@ -128,7 +128,7 @@ public class Config {
                     c.kafkaBootstrapServers, c.kafkaTopic, c.kafkaGroupId);
             LOG.info("Kafka security: protocol={}, mechanism={}, username={}",
                     c.kafkaSecurityProtocol, c.kafkaSaslMechanism, redact(c.kafkaSaslUsername));
-            LOG.info("Postgres: url={}, user={}, table={}", c.postgresUrl, redact(c.postgresUser), c.postgresTable);
+            LOG.info("JDBC: url={}, user={}, table={}", c.jdbcUrl, redact(c.jdbcUser), c.postgresTable);
         } catch (Throwable ignored) {
         }
     }

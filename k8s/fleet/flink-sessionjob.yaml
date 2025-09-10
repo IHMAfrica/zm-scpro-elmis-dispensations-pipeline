@@ -6,11 +6,11 @@ metadata:
 spec:
   deploymentName: session-cluster
   job:
-    jarURI: JAR_HTTP_URL
+    jarURI: https://github.com/IHMAfrica/zm-scpro-elmis-dispensations-pipeline/releases/download/latest/zm-scpro-elmis-dispensations-pipeline-1.0-SNAPSHOT-all.jar
     entryClass: zm.gov.moh.hie.scp.StreamingJob
-    parallelism: 2
+    parallelism: 3
     upgradeMode: stateless
     state: running
-    # arguments:
-    #   - "--kafka.bootstrap.servers=<your-broker>"
-    #   - "--kafka.topic=<your-topic>"
+    args:
+      - "--postgres.url=jdbc:postgresql://172.16.20.9:35616/hie_manager"
+      - "--kafka.group.id=scpro-elmis-dispensations-pipeline"
