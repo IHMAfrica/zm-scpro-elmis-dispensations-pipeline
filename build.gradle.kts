@@ -4,13 +4,6 @@ plugins {
     id("com.github.johnrengelman.shadow") version "8.1.1"
 }
 
-group = "zm.gov.moh.hie.scp"
-version = "1.0-SNAPSHOT"
-
-repositories {
-    mavenCentral()
-}
-
 java {
     toolchain {
         languageVersion.set(JavaLanguageVersion.of(17))
@@ -20,15 +13,21 @@ java {
 // Ensure consistent target bytecode when toolchains are not used
 tasks.withType<JavaCompile> {
     options.release.set(17)
-    options.compilerArgs.add("-Xlint:deprecation")
 }
-
-extra["flinkVersion"] = "1.20.2"
-extra["log4jVersion"] = "2.25.1"
 
 application {
     mainClass.set("zm.gov.moh.hie.scp.StreamingJob")
 }
+
+group = "zm.gov.moh.hie.scp"
+version = "1.0-SNAPSHOT"
+
+repositories {
+    mavenCentral()
+}
+
+extra["flinkVersion"] = "1.20.2"
+extra["log4jVersion"] = "2.25.1"
 
 dependencies {
     testImplementation(platform("org.junit:junit-bom:5.10.0"))
@@ -41,15 +40,16 @@ dependencies {
     implementation("org.apache.httpcomponents:httpclient:4.5.14")
     implementation("ca.uhn.hapi:hapi-structures-v25:2.5.1")
 
-    // Flink APIs - use implementation for IDE compatibility, excluded from fat jar by shadow plugin
-    implementation("org.apache.flink:flink-streaming-java:${property("flinkVersion")}")
-    implementation("org.apache.flink:flink-connector-base:${property("flinkVersion")}")
-    implementation("org.apache.flink:flink-table-api-java-bridge:${property("flinkVersion")}")
-    implementation("org.apache.flink:flink-json:${property("flinkVersion")}")
+
+    // Flink APIs (provided by cluster) – mark as compileOnly to avoid bundling into the fat jar
+    compileOnly("org.apache.flink:flink-streaming-java:${property("flinkVersion")}")
+    compileOnly("org.apache.flink:flink-connector-base:${property("flinkVersion")}")
+    compileOnly("org.apache.flink:flink-table-api-java-bridge:${property("flinkVersion")}")
+    compileOnly("org.apache.flink:flink-json:${property("flinkVersion")}")
 
     // External connectors – include unless your cluster lib/ already has matching versions
-    implementation("org.apache.flink:flink-connector-kafka:3.3.0-1.20")
-    implementation("org.apache.flink:flink-connector-jdbc:3.3.0-1.20")
+    compileOnly("org.apache.flink:flink-connector-kafka:3.3.0-1.20")
+    compileOnly("org.apache.flink:flink-connector-jdbc:3.3.0-1.20")
 
     // Jackson – include so TypeReference is available at runtime
     implementation("com.fasterxml.jackson.core:jackson-core:2.19.2")
@@ -57,7 +57,7 @@ dependencies {
     implementation("com.fasterxml.jackson.datatype:jackson-datatype-jsr310:2.19.2")
 
     // PostgreSQL driver (needed at runtime)
-    implementation("org.postgresql:postgresql:42.7.4")
+    compileOnly("org.postgresql:postgresql:42.7.4")
 
     // Logging
     implementation("org.apache.logging.log4j:log4j-slf4j-impl:${property("log4jVersion")}")
@@ -72,10 +72,8 @@ dependencies {
 // Build a fat jar called *-all.jar that includes app necessary libs (not Flink APIs)
 tasks.withType<com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar> {
     archiveClassifier.set("all")
+    archiveFileName.set("zm-scpro-elmis-dispensations-pipeline-all.jar")
     mergeServiceFiles()
-    manifest {
-        attributes["Main-Class"] = application.mainClass.get()
-    }
     minimize {
         // Keep Jackson fully
         exclude(dependency("com.fasterxml.jackson.core:.*"))
@@ -83,9 +81,8 @@ tasks.withType<com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar> {
         // Keep JDBC/ES/Kafka connectors if you ship them
         exclude(dependency("org.apache.flink:flink-connector-.*"))
     }
-    // For production deployment, exclude Flink modules (provided by cluster)
+    // Do not include Flink core modules in the fat jar
     exclude("org/apache/flink/**")
-    // For local testing, comment out the exclude line above
 }
 
 
