@@ -44,7 +44,7 @@ jobs:
         run: |
           echo "IMAGE_NAME=${GITHUB_REPOSITORY,,}" >> $GITHUB_OUTPUT
           echo "VERSION_TAG=latest" >> $GITHUB_OUTPUT
-          echo "JAR_PATH=build/libs/zm-scpro-elmis-dispensations-pipeline-1.0-SNAPSHOT-all.jar" >> $GITHUB_OUTPUT
+          echo "JAR_PATH=build/libs/zm-scpro-elmis-dispensations-pipeline-all.jar" >> $GITHUB_OUTPUT
 
       - name: Create Git tag (lightweight) for this build
         id: tag
