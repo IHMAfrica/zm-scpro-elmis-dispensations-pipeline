@@ -11,6 +11,7 @@ import org.apache.flink.connector.jdbc.JdbcExecutionOptions;
 import org.apache.flink.connector.jdbc.JdbcSink;
 import org.apache.flink.connector.kafka.source.KafkaSource;
 import org.apache.flink.connector.kafka.source.enumerator.initializer.OffsetsInitializer;
+import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.datastream.DataStreamSource;
 import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
@@ -48,7 +49,11 @@ public class StreamingJob {
                                 "password=\"" + cfg.kafkaSaslPassword + "\";")
                 .build();
 
-        DataStreamSource<String> kafkaStream = env.fromSource(source, WatermarkStrategy.noWatermarks(), "kafka-dispensations");
+        DataStream<String> kafkaStream = env.fromSource(
+                source,
+                WatermarkStrategy.noWatermarks(),
+                "kafka-dispensations"
+        ).startNewChain();
 
         ObjectMapper mapper = new ObjectMapper()
                 .registerModule(new JavaTimeModule())
@@ -65,6 +70,9 @@ public class StreamingJob {
                         return false;
                     }
 
+                    if (record.drugCount == 0)
+                        return false;
+
                     // Filter out placeholder values
                     if ("configure-me".equals(record.hmisCode)) {
                         LOG.warn("Filtered out record with placeholder HMIS code: '{}'. MessageId: {}",
@@ -72,11 +80,18 @@ public class StreamingJob {
                         return false;
                     }
 
+                    if(StringUtils.isNullOrWhitespaceOnly(record.messageId))
+                        return false;
+
+                    if(StringUtils.isNullOrWhitespaceOnly(record.refPrescription))
+                        return false;
+
                     LOG.info("Processing dispensation record from HMIS: {} with {} drugs (MessageId: {})",
                             record.hmisCode, record.drugCount, record.messageId);
                     return true;
                 })
-                .name("filter-invalid-records");
+                .name("filter-invalid-records")
+                .disableChaining();
 
         // Add JdbcSink with batch configuration and UPSERT for unique ref_prescription constraint
         @SuppressWarnings("deprecation")
