@@ -3,6 +3,9 @@ name: CI Build and Publish JAR Release
 on:
   pull_request:
     types: [opened, reopened, synchronize]
+  push:
+    branches:
+      - main
 
 # env:
   # No container registry is needed; we publish the JAR as a GitHub Release asset.
@@ -49,9 +52,7 @@ jobs:
       - name: Create Git tag (lightweight) for this build
         id: tag
         run: |
-          # Use commit SHA (first 7 chars) to create unique release tags
-          TAG="release-${GITHUB_SHA:0:7}"
-          echo "TAG=${TAG}" >> $GITHUB_OUTPUT
+          echo "TAG=latest" >> $GITHUB_OUTPUT
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -64,9 +65,13 @@ jobs:
             ${{ steps.vars.outputs.JAR_PATH }}
 
       - name: Prepare k8s manifests artifact
+        env:
+          REPO: ${{ github.repository }}
         run: |
           TAG=${{ steps.tag.outputs.TAG }}
-          sed -e "s#JAR_RELEASE_TAG#${TAG}#g" \
+          # Use GitHub release asset URL pattern. Note: for private repos, a token is required by the Operator.
+          JAR_URL="https://github.com/${REPO}/releases/download/${TAG}/$(basename ${{ steps.vars.outputs.JAR_PATH }})"
+          sed -e "s#JAR_HTTP_URL#${JAR_URL}#g" \
               k8s/fleet/flink-sessionjob.yaml > k8s/fleet/flink-sessionjob.resolved.yaml
 
       - name: Upload manifests artifact

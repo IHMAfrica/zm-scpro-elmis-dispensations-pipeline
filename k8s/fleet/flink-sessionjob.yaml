@@ -6,7 +6,7 @@ metadata:
 spec:
   deploymentName: session-cluster
   job:
-    jarURI: https://github.com/IHMAfrica/zm-scpro-elmis-dispensations-pipeline/releases/download/JAR_RELEASE_TAG/zm-scpro-elmis-dispensations-pipeline-all.jar
+    jarURI: https://github.com/IHMAfrica/zm-scpro-elmis-dispensations-pipeline/releases/download/latest/zm-scpro-elmis-dispensations-pipeline-all.jar
     entryClass: zm.gov.moh.hie.scp.StreamingJob
     parallelism: 3
     upgradeMode: stateless
