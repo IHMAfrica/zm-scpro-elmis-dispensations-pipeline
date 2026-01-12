@@ -56,12 +56,13 @@ class StreamingJobTest {
         // Use reflection to access private method for testing
         Method toRecordMethod = StreamingJob.class.getDeclaredMethod("toRecord", String.class, ObjectMapper.class);
         toRecordMethod.setAccessible(true);
-        
+
         DispensationRecord record = (DispensationRecord) toRecordMethod.invoke(null, testJson, objectMapper);
 
         assertNotNull(record);
         assertEquals("5006XXHZ", record.hmisCode);
-        assertEquals(1, record.drugCount); // 1 dispensed drug in array
+        assertEquals(0, record.drugCount); // 0 non-ARV drugs
+        assertEquals(1, record.arvDrugCount); // 1 ARV drug (ARV0082)
         assertEquals("e3d28a27-e444-47ec-ae1a-dea4e7e2b13f", record.refPrescription);
         assertEquals("c72defc8-e811-4ea1-a07f-c3cf3414260f", record.messageId);
     }
@@ -72,12 +73,13 @@ class StreamingJobTest {
 
         Method toRecordMethod = StreamingJob.class.getDeclaredMethod("toRecord", String.class, ObjectMapper.class);
         toRecordMethod.setAccessible(true);
-        
+
         DispensationRecord record = (DispensationRecord) toRecordMethod.invoke(null, invalidJson, objectMapper);
 
         assertNotNull(record);
         assertNull(record.hmisCode);
         assertNull(record.drugCount);
+        assertNull(record.arvDrugCount);
         assertNull(record.refPrescription);
         assertNull(record.messageId);
     }
@@ -95,12 +97,13 @@ class StreamingJobTest {
 
         Method toRecordMethod = StreamingJob.class.getDeclaredMethod("toRecord", String.class, ObjectMapper.class);
         toRecordMethod.setAccessible(true);
-        
+
         DispensationRecord record = (DispensationRecord) toRecordMethod.invoke(null, testJsonMissingFields, objectMapper);
 
         assertNotNull(record);
         assertNull(record.hmisCode); // Missing msh.hmisCode and root hmisCode
-        assertEquals(0, record.drugCount); // Empty dispensedDrugs array
+        assertEquals(0, record.drugCount); // 0 non-ARV drugs in empty array
+        assertEquals(0, record.arvDrugCount); // 0 ARV drugs in empty array
         assertNull(record.refPrescription); // Missing prescriptionUuid
         assertEquals("test-message-002", record.messageId);
     }
@@ -119,12 +122,16 @@ class StreamingJobTest {
                         "quantityDispensed": 30.0
                     },
                     {
+                        "mslDrugId": "PARACETAMOL01",
+                        "quantityDispensed": 20.0
+                    },
+                    {
                         "mslDrugId": "ARV0083",
                         "quantityDispensed": 60.0
                     },
                     {
-                        "mslDrugId": "ARV0084",
-                        "quantityDispensed": 90.0
+                        "mslDrugId": "ASPIRIN01",
+                        "quantityDispensed": 10.0
                     }
                 ],
                 "prescriptionUuid": "test-prescription-uuid"
@@ -133,12 +140,13 @@ class StreamingJobTest {
 
         Method toRecordMethod = StreamingJob.class.getDeclaredMethod("toRecord", String.class, ObjectMapper.class);
         toRecordMethod.setAccessible(true);
-        
+
         DispensationRecord record = (DispensationRecord) toRecordMethod.invoke(null, testJsonMultipleDrugs, objectMapper);
 
         assertNotNull(record);
         assertEquals("50060011", record.hmisCode);
-        assertEquals(3, record.drugCount); // 3 dispensed drugs in array
+        assertEquals(2, record.drugCount); // 2 non-ARV drugs (PARACETAMOL01, ASPIRIN01)
+        assertEquals(2, record.arvDrugCount); // 2 ARV drugs (ARV0082, ARV0083)
         assertEquals("test-prescription-uuid", record.refPrescription);
         assertEquals("test-message-003", record.messageId);
     }
@@ -159,7 +167,7 @@ class StreamingJobTest {
 
         Method toRecordMethod = StreamingJob.class.getDeclaredMethod("toRecord", String.class, ObjectMapper.class);
         toRecordMethod.setAccessible(true);
-        
+
         DispensationRecord record = (DispensationRecord) toRecordMethod.invoke(null, testJsonBothHmisCodes, objectMapper);
 
         assertNotNull(record);
@@ -171,23 +179,27 @@ class StreamingJobTest {
     void testMapFunctionSerialization() throws Exception {
         // Test that the MapFunction can be instantiated and used
         StreamingJob.DispensationMapFunction mapFunction = new StreamingJob.DispensationMapFunction();
-        
+
         String testJson = """
             {
                 "msh": {
                     "hmisCode": "TEST_FACILITY",
                     "messageId": "test-001"
                 },
-                "dispensedDrugs": [{"mslDrugId": "TEST_DRUG"}],
+                "dispensedDrugs": [
+                    {"mslDrugId": "TEST_DRUG"},
+                    {"mslDrugId": "ARV_TEST"}
+                ],
                 "prescriptionUuid": "test-prescription"
             }
             """;
 
         DispensationRecord result = mapFunction.map(testJson);
-        
+
         assertNotNull(result);
         assertEquals("TEST_FACILITY", result.hmisCode);
-        assertEquals(1, result.drugCount);
+        assertEquals(1, result.drugCount); // 1 non-ARV drug (TEST_DRUG)
+        assertEquals(1, result.arvDrugCount); // 1 ARV drug (ARV_TEST)
         assertEquals("test-prescription", result.refPrescription);
         assertEquals("test-001", result.messageId);
     }

@@ -12,7 +12,6 @@ import org.apache.flink.connector.jdbc.JdbcSink;
 import org.apache.flink.connector.kafka.source.KafkaSource;
 import org.apache.flink.connector.kafka.source.enumerator.initializer.OffsetsInitializer;
 import org.apache.flink.streaming.api.datastream.DataStream;
-import org.apache.flink.streaming.api.datastream.DataStreamSource;
 import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.util.StringUtils;
@@ -103,22 +102,28 @@ public class StreamingJob {
         // Add JdbcSink with batch configuration and UPSERT for unique ref_prescription constraint
         @SuppressWarnings("deprecation")
         var sink = JdbcSink.sink(
-                "INSERT INTO " + cfg.postgresTable + " (hmis_code, drug_count, ref_prescription) " +
-                        "VALUES (?, ?, ?) " +
+                "INSERT INTO " + cfg.postgresTable + " (hmis_code, drug_count, arv_drug_count, ref_prescription) " +
+                        "VALUES (?, ?, ?, ?) " +
                         "ON CONFLICT (ref_prescription) " +
                         "DO UPDATE SET " +
                         "hmis_code = EXCLUDED.hmis_code, " +
                         "drug_count = EXCLUDED.drug_count, " +
+                        "arv_drug_count = EXCLUDED.arv_drug_count, " +
                         "date = CURRENT_DATE, " +
                         "time = CURRENT_TIME::time(0)",
                 (PreparedStatement statement, DispensationRecord record) -> {
-                    statement.setString(1, record.hmisCode);
-                    if (record.drugCount != null) {
-                        statement.setInt(2, record.drugCount);
+                    statement.setString(1, record.getHmisCode());
+                    if (record.getDrugCount() != null) {
+                        statement.setInt(2, record.getDrugCount());
                     } else {
                         statement.setNull(2, Types.SMALLINT);
                     }
-                    statement.setString(3, record.refPrescription);
+                    if (record.getArvDrugCount() != null) {
+                        statement.setInt(3, record.getArvDrugCount());
+                    } else {
+                        statement.setNull(3, Types.SMALLINT);
+                    }
+                    statement.setString(4, record.getRefPrescription());
                 },
                 JdbcExecutionOptions.builder()
                         .withBatchSize(1000)
@@ -145,23 +150,33 @@ public class StreamingJob {
             String messageId = msg.msh != null ? msg.msh.messageId : null;
             String hmisCode = msg.msh != null ? msg.msh.hmisCode : msg.hmisCode; // Use msh.hmisCode first, fall back to root level
 
-            // Calculate drug count from dispensedDrugs array
-            Integer drugCount = null;
+            // Calculate drug counts from dispensedDrugs array
+            Integer drugCount = null;      // Count of non-ARV drugs (Essential medicines)
+            Integer arvDrugCount = null;   // Count of ARV drugs only (HIV)
+
             if (msg.dispensedDrugs != null) {
-                drugCount = msg.dispensedDrugs.size();
+                // Count non-ARV drugs (Essential medicines)
+                drugCount = (int) msg.dispensedDrugs.stream()
+                        .filter(drug -> drug != null && drug.mslDrugId != null && !drug.mslDrugId.contains("ARV"))
+                        .count();
+
+                // Count ARV drugs specifically (HIV drugs with mslDrugId starting with "ARV")
+                arvDrugCount = (int) msg.dispensedDrugs.stream()
+                        .filter(drug -> drug != null && drug.mslDrugId != null && drug.mslDrugId.contains("ARV"))
+                        .count();
             }
 
             // Use prescriptionUuid as reference to prescription
             String refPrescription = msg.prescriptionUuid;
 
-            return new DispensationRecord(hmisCode, drugCount, refPrescription, messageId);
+            return new DispensationRecord(hmisCode, drugCount, arvDrugCount, refPrescription, messageId);
         } catch (JsonProcessingException e) {
             LOG.error("Failed to parse JSON: {}", json, e);
             // Return a record with minimal info to avoid pipeline failure
-            return new DispensationRecord(null, null, null, null);
+            return new DispensationRecord(null, null, null, null, null);
         } catch (Exception e) {
             LOG.error("Unexpected error processing record: {}", json, e);
-            return new DispensationRecord(null, null, null, null);
+            return new DispensationRecord(null, null, null, null, null);
         }
     }
 
