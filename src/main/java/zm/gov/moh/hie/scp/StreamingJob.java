@@ -21,7 +21,6 @@ import zm.gov.moh.hie.scp.dto.DispensationMessage;
 import zm.gov.moh.hie.scp.model.DispensationRecord;
 
 import java.sql.PreparedStatement;
-import java.sql.Types;
 
 import org.apache.flink.api.common.functions.MapFunction;
 
@@ -113,16 +112,10 @@ public class StreamingJob {
                         "time = CURRENT_TIME::time(0)",
                 (PreparedStatement statement, DispensationRecord record) -> {
                     statement.setString(1, record.getHmisCode());
-                    if (record.getDrugCount() != null) {
-                        statement.setInt(2, record.getDrugCount());
-                    } else {
-                        statement.setNull(2, Types.SMALLINT);
-                    }
-                    if (record.getArvDrugCount() != null) {
-                        statement.setInt(3, record.getArvDrugCount());
-                    } else {
-                        statement.setNull(3, Types.SMALLINT);
-                    }
+                    // Set drug_count (non-ARV drugs), default to 0 if null
+                    statement.setInt(2, record.getDrugCount() != null ? record.getDrugCount() : 0);
+                    // Set arv_drug_count (ARV/HIV drugs), default to 0 if null
+                    statement.setInt(3, record.getArvDrugCount() != null ? record.getArvDrugCount() : 0);
                     statement.setString(4, record.getRefPrescription());
                 },
                 JdbcExecutionOptions.builder()
