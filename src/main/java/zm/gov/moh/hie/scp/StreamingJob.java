@@ -19,10 +19,16 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import zm.gov.moh.hie.scp.dto.DispensationMessage;
 import zm.gov.moh.hie.scp.model.DispensationRecord;
+import zm.gov.moh.hie.scp.model.DispensationDrugRecord;
 
 import java.sql.PreparedStatement;
+import java.sql.Types;
+import java.util.ArrayList;
+import java.util.List;
 
 import org.apache.flink.api.common.functions.MapFunction;
+import org.apache.flink.api.common.functions.FlatMapFunction;
+import org.apache.flink.util.Collector;
 
 public class StreamingJob {
     private static final Logger LOG = LoggerFactory.getLogger(StreamingJob.class);
@@ -101,13 +107,19 @@ public class StreamingJob {
         // Add JdbcSink with batch configuration and UPSERT for unique ref_prescription constraint
         @SuppressWarnings("deprecation")
         var sink = JdbcSink.sink(
-                "INSERT INTO " + cfg.postgresTable + " (hmis_code, drug_count, arv_drug_count, ref_prescription) " +
-                        "VALUES (?, ?, ?, ?) " +
+                "INSERT INTO " + cfg.postgresTable + " (hmis_code, drug_count, arv_drug_count, ref_prescription, " +
+                        "patient_guid, art_number, next_visit_date, transaction_time, dispensation_date) " +
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) " +
                         "ON CONFLICT (ref_prescription) " +
                         "DO UPDATE SET " +
                         "hmis_code = EXCLUDED.hmis_code, " +
                         "drug_count = EXCLUDED.drug_count, " +
                         "arv_drug_count = EXCLUDED.arv_drug_count, " +
+                        "patient_guid = EXCLUDED.patient_guid, " +
+                        "art_number = EXCLUDED.art_number, " +
+                        "next_visit_date = EXCLUDED.next_visit_date, " +
+                        "transaction_time = EXCLUDED.transaction_time, " +
+                        "dispensation_date = EXCLUDED.dispensation_date, " +
                         "date = CURRENT_DATE, " +
                         "time = CURRENT_TIME::time(0)",
                 (PreparedStatement statement, DispensationRecord record) -> {
@@ -117,6 +129,12 @@ public class StreamingJob {
                     // Set arv_drug_count (ARV/HIV drugs), default to 0 if null
                     statement.setInt(3, record.getArvDrugCount() != null ? record.getArvDrugCount() : 0);
                     statement.setString(4, record.getRefPrescription());
+                    statement.setString(5, record.getPatientGuid());
+                    statement.setString(6, record.getArtNumber());
+                    // Parse and set date fields
+                    setDateField(statement, 7, record.getNextVisitDate());
+                    setTimeField(statement, 8, record.getTransactionTime());
+                    setDateField(statement, 9, record.getDispensationDate());
                 },
                 JdbcExecutionOptions.builder()
                         .withBatchSize(1000)
@@ -132,6 +150,48 @@ public class StreamingJob {
         );
         records.addSink(sink).name("postgres-sink");
 
+        // Add sink for drug records
+        @SuppressWarnings("deprecation")
+        var drugSink = JdbcSink.sink(
+                "INSERT INTO crt.dispensation_drug (ref_prescription, msl_drug_id, quantity_dispensed, " +
+                        "unit_quantity_per_dose, frequency, unit_of_measurement, medication_id) " +
+                        "VALUES (?, ?, ?, ?, ?, ?, ?) " +
+                        "ON CONFLICT (ref_prescription, msl_drug_id) DO UPDATE SET " +
+                        "quantity_dispensed = EXCLUDED.quantity_dispensed, " +
+                        "unit_quantity_per_dose = EXCLUDED.unit_quantity_per_dose, " +
+                        "frequency = EXCLUDED.frequency, " +
+                        "unit_of_measurement = EXCLUDED.unit_of_measurement, " +
+                        "medication_id = EXCLUDED.medication_id",
+                (PreparedStatement statement, DispensationDrugRecord drug) -> {
+                    statement.setString(1, drug.getRefPrescription());
+                    statement.setString(2, drug.getMslDrugId());
+                    setNumericField(statement, 3, drug.getQuantityDispensed());
+                    setNumericField(statement, 4, drug.getUnitQuantityPerDose());
+                    statement.setString(5, drug.getFrequency());
+                    statement.setString(6, drug.getUnitOfMeasurement());
+                    statement.setString(7, drug.getMedicationId());
+                },
+                JdbcExecutionOptions.builder()
+                        .withBatchSize(1000)
+                        .withBatchIntervalMs(200)
+                        .withMaxRetries(5)
+                        .build(),
+                new JdbcConnectionOptions.JdbcConnectionOptionsBuilder()
+                        .withUrl(cfg.jdbcUrl)
+                        .withDriverName("org.postgresql.Driver")
+                        .withUsername(cfg.jdbcUser)
+                        .withPassword(cfg.jdbcPassword)
+                        .build()
+        );
+
+        // Fan out drug records from the filtered records stream
+        DataStream<DispensationDrugRecord> drugRecords = records
+                .flatMap(new DispensationDrugFlatMapFunction())
+                .name("flatten-drugs")
+                .filter(d -> d.getRefPrescription() != null && d.getMslDrugId() != null)
+                .name("filter-invalid-drugs");
+        drugRecords.addSink(drugSink).name("postgres-drug-sink");
+
         env.execute("SC ELMIS Dispensations Pipeline");
     }
 
@@ -146,6 +206,7 @@ public class StreamingJob {
             // Calculate drug counts from dispensedDrugs array
             Integer drugCount = null;      // Count of non-ARV drugs (Essential medicines)
             Integer arvDrugCount = null;   // Count of ARV drugs only (HIV)
+            List<DispensationDrugRecord> drugs = new ArrayList<>();
 
             if (msg.dispensedDrugs != null) {
                 // Count non-ARV drugs (Essential medicines)
@@ -157,12 +218,38 @@ public class StreamingJob {
                 arvDrugCount = (int) msg.dispensedDrugs.stream()
                         .filter(drug -> drug != null && drug.mslDrugId != null && drug.mslDrugId.contains("ARV"))
                         .count();
+
+                // Build drug records for each dispensed drug
+                for (DispensationMessage.DispensedDrug drug : msg.dispensedDrugs) {
+                    if (drug != null && drug.mslDrugId != null) {
+                        DispensationDrugRecord drugRecord = new DispensationDrugRecord(
+                                msg.prescriptionUuid,
+                                drug.mslDrugId,
+                                drug.quantityDispensed,
+                                drug.unitQuantityPerDose,
+                                drug.frequency,
+                                drug.unitOfMeasurement,
+                                drug.medicationId
+                        );
+                        drugs.add(drugRecord);
+                    }
+                }
             }
 
             // Use prescriptionUuid as reference to prescription
             String refPrescription = msg.prescriptionUuid;
 
-            return new DispensationRecord(hmisCode, drugCount, arvDrugCount, refPrescription, messageId);
+            // Extract new fields from payload
+            String patientGuid = msg.patientGuid;
+            String artNumber = msg.artNumber;
+            String nextVisitDate = msg.nextVisitDate;
+            String transactionTime = msg.transactionTime;
+            String dispensationDate = msg.dispensationDate;
+
+            return new DispensationRecord(
+                    hmisCode, drugCount, arvDrugCount, refPrescription, messageId,
+                    patientGuid, artNumber, nextVisitDate, transactionTime, dispensationDate, drugs
+            );
         } catch (JsonProcessingException e) {
             LOG.error("Failed to parse JSON: {}", json, e);
             // Return a record with minimal info to avoid pipeline failure
@@ -170,6 +257,49 @@ public class StreamingJob {
         } catch (Exception e) {
             LOG.error("Unexpected error processing record: {}", json, e);
             return new DispensationRecord(null, null, null, null, null);
+        }
+    }
+
+    /**
+     * Helper method to set a date field from string (yyyy-MM-dd format)
+     */
+    private static void setDateField(PreparedStatement statement, int parameterIndex, String dateString) throws java.sql.SQLException {
+        if (dateString == null || dateString.isBlank()) {
+            statement.setNull(parameterIndex, Types.DATE);
+        } else {
+            try {
+                statement.setDate(parameterIndex, java.sql.Date.valueOf(dateString));
+            } catch (IllegalArgumentException e) {
+                LOG.warn("Failed to parse date '{}': {}", dateString, e.getMessage());
+                statement.setNull(parameterIndex, Types.DATE);
+            }
+        }
+    }
+
+    /**
+     * Helper method to set a time field from string (HH:mm:ss format)
+     */
+    private static void setTimeField(PreparedStatement statement, int parameterIndex, String timeString) throws java.sql.SQLException {
+        if (timeString == null || timeString.isBlank()) {
+            statement.setNull(parameterIndex, Types.TIME);
+        } else {
+            try {
+                statement.setTime(parameterIndex, java.sql.Time.valueOf(timeString));
+            } catch (IllegalArgumentException e) {
+                LOG.warn("Failed to parse time '{}': {}", timeString, e.getMessage());
+                statement.setNull(parameterIndex, Types.TIME);
+            }
+        }
+    }
+
+    /**
+     * Helper method to set a numeric field that can be null
+     */
+    private static void setNumericField(PreparedStatement statement, int parameterIndex, Double value) throws java.sql.SQLException {
+        if (value == null) {
+            statement.setNull(parameterIndex, Types.NUMERIC);
+        } else {
+            statement.setDouble(parameterIndex, value);
         }
     }
 
@@ -191,6 +321,22 @@ public class StreamingJob {
             }
 
             return toRecord(json, objectMapper);
+        }
+    }
+
+    /**
+     * Serializable FlatMapFunction to emit individual drug records from a DispensationRecord
+     */
+    public static class DispensationDrugFlatMapFunction implements FlatMapFunction<DispensationRecord, DispensationDrugRecord> {
+        private static final long serialVersionUID = 1L;
+
+        @Override
+        public void flatMap(DispensationRecord record, Collector<DispensationDrugRecord> out) throws Exception {
+            if (record.getDrugs() != null && !record.getDrugs().isEmpty()) {
+                for (DispensationDrugRecord drug : record.getDrugs()) {
+                    out.collect(drug);
+                }
+            }
         }
     }
 }

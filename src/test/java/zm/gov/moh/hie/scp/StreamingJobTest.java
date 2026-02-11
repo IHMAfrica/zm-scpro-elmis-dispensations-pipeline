@@ -65,6 +65,19 @@ class StreamingJobTest {
         assertEquals(1, record.arvDrugCount); // 1 ARV drug (ARV0082)
         assertEquals("e3d28a27-e444-47ec-ae1a-dea4e7e2b13f", record.refPrescription);
         assertEquals("c72defc8-e811-4ea1-a07f-c3cf3414260f", record.messageId);
+
+        // Verify new fields
+        assertEquals("24a74b77-09ce-468e-9ce5-1439cd2027ab", record.patientGuid);
+        assertEquals("5040-HZ1-00706-3", record.artNumber);
+        assertEquals("2025-09-04", record.nextVisitDate);
+        assertEquals("08:37:43", record.transactionTime);
+        assertEquals("2025-06-09", record.dispensationDate);
+
+        // Verify drug records were created
+        assertNotNull(record.drugs);
+        assertEquals(1, record.drugs.size());
+        assertEquals("ARV0082", record.drugs.get(0).getMslDrugId());
+        assertEquals(90.0, record.drugs.get(0).getQuantityDispensed());
     }
 
     @Test
@@ -202,5 +215,41 @@ class StreamingJobTest {
         assertEquals(1, result.arvDrugCount); // 1 ARV drug (ARV_TEST)
         assertEquals("test-prescription", result.refPrescription);
         assertEquals("test-001", result.messageId);
+    }
+
+    @Test
+    void testNullOptionalFields() throws Exception {
+        // Test handling of missing optional fields
+        String testJsonMissingOptionalFields = """
+            {
+                "msh": {
+                    "messageId": "test-message-null",
+                    "hmisCode": "5006TEST"
+                },
+                "dispensedDrugs": [
+                    {"mslDrugId": "PARACETAMOL", "quantityDispensed": 10.0}
+                ],
+                "prescriptionUuid": "test-uuid-null"
+            }
+            """;
+
+        Method toRecordMethod = StreamingJob.class.getDeclaredMethod("toRecord", String.class, ObjectMapper.class);
+        toRecordMethod.setAccessible(true);
+
+        DispensationRecord record = (DispensationRecord) toRecordMethod.invoke(null, testJsonMissingOptionalFields, objectMapper);
+
+        assertNotNull(record);
+        assertEquals("5006TEST", record.hmisCode);
+        // New optional fields should be null when missing from payload
+        assertNull(record.patientGuid);
+        assertNull(record.artNumber);
+        assertNull(record.nextVisitDate);
+        assertNull(record.transactionTime);
+        assertNull(record.dispensationDate);
+        // Drug should still be created
+        assertNotNull(record.drugs);
+        assertEquals(1, record.drugs.size());
+        assertEquals("PARACETAMOL", record.drugs.get(0).getMslDrugId());
+        assertEquals(10.0, record.drugs.get(0).getQuantityDispensed());
     }
 }
