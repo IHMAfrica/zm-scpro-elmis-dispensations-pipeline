@@ -3,66 +3,57 @@ package zm.gov.moh.hie.scp.model;
 import java.io.Serializable;
 
 /**
- * Represents a dispensation record matching the crt.dispensation table schema
+ * Represents a normalized dispensation record (1 row per dispensed drug)
+ * matching the crt.dispensation table schema
+ *
+ * Dispensation-level fields (from prescription):
+ * - hmis_code, ref_prescription, message_id, patient_guid, art_number
+ * - next_visit_date, transaction_time, dispensation_date, clinician_id
+ *
+ * Drug-level fields (1 row per drug):
+ * - msl_drug_id, medication_id, quantity_dispensed, unit_qty_per_dose
+ * - frequency, unit_of_measurement, msh_timestamp
  *
  * Database columns:
  * - id (bigint, auto-generated primary key)
- * - hmis_code (varchar(50), NOT NULL)
- * - drug_count (smallint) - count of non-ARV drugs (Essential medicines only)
- * - arv_drug_count (smallint) - count of ARV drugs (HIV medications only)
  * - date (date, NOT NULL, defaults to CURRENT_DATE)
  * - time (time, NOT NULL, defaults to CURRENT_TIME)
- * - ref_prescription (varchar(50))
- * - patient_guid (varchar(100)) - patient identifier
- * - art_number (varchar(100)) - ART number
- * - next_visit_date (date) - next appointment date
- * - transaction_time (time) - transaction timestamp
- * - dispensation_date (date) - actual dispensation date
- *
- * Drug Classification:
- * - ARV drugs: mslDrugId contains "ARV" (e.g., ARV0092)
- * - Essential drugs: mslDrugId does NOT contain "ARV"
+ * - UNIQUE(ref_prescription, medication_id, msl_drug_id)
  */
 public class DispensationRecord implements Serializable {
     private static final long serialVersionUID = 1L;
 
-    // Note: id is auto-generated, so not included in insert
+    // Dispensation-level fields
     public String hmisCode;           // HMIS facility code
-    public Integer drugCount;         // Count of non-ARV drugs only (Essential medicines)
-    public Integer arvDrugCount;      // Count of ARV drugs only (HIV medications with mslDrugId containing "ARV")
     public String refPrescription;    // Reference to prescription UUID
-    public String messageId;          // For logging/debugging (not stored in DB)
+    public String messageId;          // Message ID from msh
+    public String patientGuid;        // Patient identifier
+    public String artNumber;          // ART number
+    public String nextVisitDate;      // Next visit date as string "yyyy-MM-dd"
+    public String transactionTime;    // Transaction time as string "HH:mm:ss"
+    public String dispensationDate;   // Dispensation date as string "yyyy-MM-dd"
+    public String clinicianId;        // Clinician identifier
 
-    // New fields from enhanced payload
-    public String patientGuid;        // Patient identifier (nullable)
-    public String artNumber;          // ART number (nullable)
-    public String nextVisitDate;      // Next visit date as string "yyyy-MM-dd" (nullable)
-    public String transactionTime;    // Transaction time as string "HH:mm:ss" (nullable)
-    public String dispensationDate;   // Dispensation date as string "yyyy-MM-dd" (nullable)
-
-    // Drug line items (for streaming to drug sink, not stored in parent DB row)
-    public java.util.List<DispensationDrugRecord> drugs;  // List of drug records
+    // Drug-level fields (normalized - one row per drug)
+    public String mslDrugId;          // Drug identifier from ELMIS (e.g., ARV0077)
+    public String medicationId;       // Medication identifier UUID
+    public Double quantityDispensed;  // Quantity dispensed
+    public Double unitQtyPerDose;     // Unit quantity per dose
+    public String frequency;          // Dosage frequency (e.g., "od", "bd")
+    public String unitOfMeasurement;  // Unit of measurement (e.g., "tab")
+    public String mshTimestamp;       // Message timestamp
 
     // Default constructor
     public DispensationRecord() {}
 
-    // Constructor
-    public DispensationRecord(String hmisCode, Integer drugCount, Integer arvDrugCount, String refPrescription, String messageId) {
+    // Constructor for normalized record (one per drug)
+    public DispensationRecord(String hmisCode, String refPrescription, String messageId,
+                              String patientGuid, String artNumber, String nextVisitDate,
+                              String transactionTime, String dispensationDate, String clinicianId,
+                              String mslDrugId, String medicationId, Double quantityDispensed,
+                              Double unitQtyPerDose, String frequency, String unitOfMeasurement,
+                              String mshTimestamp) {
         this.hmisCode = hmisCode;
-        this.drugCount = drugCount;
-        this.arvDrugCount = arvDrugCount;
-        this.refPrescription = refPrescription;
-        this.messageId = messageId;
-        this.drugs = new java.util.ArrayList<>();
-    }
-
-    // Extended constructor with new fields
-    public DispensationRecord(String hmisCode, Integer drugCount, Integer arvDrugCount, String refPrescription,
-                              String messageId, String patientGuid, String artNumber, String nextVisitDate,
-                              String transactionTime, String dispensationDate, java.util.List<DispensationDrugRecord> drugs) {
-        this.hmisCode = hmisCode;
-        this.drugCount = drugCount;
-        this.arvDrugCount = arvDrugCount;
         this.refPrescription = refPrescription;
         this.messageId = messageId;
         this.patientGuid = patientGuid;
@@ -70,112 +61,74 @@ public class DispensationRecord implements Serializable {
         this.nextVisitDate = nextVisitDate;
         this.transactionTime = transactionTime;
         this.dispensationDate = dispensationDate;
-        this.drugs = drugs != null ? drugs : new java.util.ArrayList<>();
+        this.clinicianId = clinicianId;
+        this.mslDrugId = mslDrugId;
+        this.medicationId = medicationId;
+        this.quantityDispensed = quantityDispensed;
+        this.unitQtyPerDose = unitQtyPerDose;
+        this.frequency = frequency;
+        this.unitOfMeasurement = unitOfMeasurement;
+        this.mshTimestamp = mshTimestamp;
     }
 
     // Getters and Setters
-    public String getHmisCode() {
-        return hmisCode;
-    }
+    public String getHmisCode() { return hmisCode; }
+    public void setHmisCode(String hmisCode) { this.hmisCode = hmisCode; }
 
-    public void setHmisCode(String hmisCode) {
-        this.hmisCode = hmisCode;
-    }
+    public String getRefPrescription() { return refPrescription; }
+    public void setRefPrescription(String refPrescription) { this.refPrescription = refPrescription; }
 
-    public Integer getDrugCount() {
-        return drugCount;
-    }
+    public String getMessageId() { return messageId; }
+    public void setMessageId(String messageId) { this.messageId = messageId; }
 
-    public void setDrugCount(Integer drugCount) {
-        this.drugCount = drugCount;
-    }
+    public String getPatientGuid() { return patientGuid; }
+    public void setPatientGuid(String patientGuid) { this.patientGuid = patientGuid; }
 
-    public Integer getArvDrugCount() {
-        return arvDrugCount;
-    }
+    public String getArtNumber() { return artNumber; }
+    public void setArtNumber(String artNumber) { this.artNumber = artNumber; }
 
-    public void setArvDrugCount(Integer arvDrugCount) {
-        this.arvDrugCount = arvDrugCount;
-    }
+    public String getNextVisitDate() { return nextVisitDate; }
+    public void setNextVisitDate(String nextVisitDate) { this.nextVisitDate = nextVisitDate; }
 
-    public String getRefPrescription() {
-        return refPrescription;
-    }
+    public String getTransactionTime() { return transactionTime; }
+    public void setTransactionTime(String transactionTime) { this.transactionTime = transactionTime; }
 
-    public void setRefPrescription(String refPrescription) {
-        this.refPrescription = refPrescription;
-    }
+    public String getDispensationDate() { return dispensationDate; }
+    public void setDispensationDate(String dispensationDate) { this.dispensationDate = dispensationDate; }
 
-    public String getMessageId() {
-        return messageId;
-    }
+    public String getClinicianId() { return clinicianId; }
+    public void setClinicianId(String clinicianId) { this.clinicianId = clinicianId; }
 
-    public void setMessageId(String messageId) {
-        this.messageId = messageId;
-    }
+    public String getMslDrugId() { return mslDrugId; }
+    public void setMslDrugId(String mslDrugId) { this.mslDrugId = mslDrugId; }
 
-    public String getPatientGuid() {
-        return patientGuid;
-    }
+    public String getMedicationId() { return medicationId; }
+    public void setMedicationId(String medicationId) { this.medicationId = medicationId; }
 
-    public void setPatientGuid(String patientGuid) {
-        this.patientGuid = patientGuid;
-    }
+    public Double getQuantityDispensed() { return quantityDispensed; }
+    public void setQuantityDispensed(Double quantityDispensed) { this.quantityDispensed = quantityDispensed; }
 
-    public String getArtNumber() {
-        return artNumber;
-    }
+    public Double getUnitQtyPerDose() { return unitQtyPerDose; }
+    public void setUnitQtyPerDose(Double unitQtyPerDose) { this.unitQtyPerDose = unitQtyPerDose; }
 
-    public void setArtNumber(String artNumber) {
-        this.artNumber = artNumber;
-    }
+    public String getFrequency() { return frequency; }
+    public void setFrequency(String frequency) { this.frequency = frequency; }
 
-    public String getNextVisitDate() {
-        return nextVisitDate;
-    }
+    public String getUnitOfMeasurement() { return unitOfMeasurement; }
+    public void setUnitOfMeasurement(String unitOfMeasurement) { this.unitOfMeasurement = unitOfMeasurement; }
 
-    public void setNextVisitDate(String nextVisitDate) {
-        this.nextVisitDate = nextVisitDate;
-    }
-
-    public String getTransactionTime() {
-        return transactionTime;
-    }
-
-    public void setTransactionTime(String transactionTime) {
-        this.transactionTime = transactionTime;
-    }
-
-    public String getDispensationDate() {
-        return dispensationDate;
-    }
-
-    public void setDispensationDate(String dispensationDate) {
-        this.dispensationDate = dispensationDate;
-    }
-
-    public java.util.List<DispensationDrugRecord> getDrugs() {
-        return drugs;
-    }
-
-    public void setDrugs(java.util.List<DispensationDrugRecord> drugs) {
-        this.drugs = drugs;
-    }
+    public String getMshTimestamp() { return mshTimestamp; }
+    public void setMshTimestamp(String mshTimestamp) { this.mshTimestamp = mshTimestamp; }
 
     @Override
     public String toString() {
         return "DispensationRecord{" +
                 "hmisCode='" + hmisCode + '\'' +
-                ", drugCount=" + drugCount +
-                ", arvDrugCount=" + arvDrugCount +
                 ", refPrescription='" + refPrescription + '\'' +
-                ", messageId='" + messageId + '\'' +
-                ", patientGuid='" + patientGuid + '\'' +
-                ", artNumber='" + artNumber + '\'' +
-                ", nextVisitDate='" + nextVisitDate + '\'' +
-                ", transactionTime='" + transactionTime + '\'' +
-                ", dispensationDate='" + dispensationDate + '\'' +
-                ", drugsCount=" + (drugs != null ? drugs.size() : 0) +
+                ", mslDrugId='" + mslDrugId + '\'' +
+                ", medicationId='" + medicationId + '\'' +
+                ", quantityDispensed=" + quantityDispensed +
+                ", frequency='" + frequency + '\'' +
                 '}';
     }
 }

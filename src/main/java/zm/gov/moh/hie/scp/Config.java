@@ -62,7 +62,7 @@ public class Config {
         // 1) defaults (current hard-coded ones kept as defaults, but can be overridden)
         params.put("kafka.bootstrap.servers", "154.120.216.119:9093,102.23.120.153:9093,102.23.123.251:9093");
         params.put("kafka.topic", "dispensations-prime");
-        params.put("kafka.group.id", "flink-scpro-elmis-dispensations-consumer-v1");
+        params.put("kafka.group.id", "flink-scpro-elmis-dispensations-consumer-v3");
         params.put("kafka.security.protocol", "SASL_PLAINTEXT");
         params.put("kafka.sasl.mechanism", "SCRAM-SHA-256");
         params.put("kafka.sasl.username", "admin");

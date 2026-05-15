@@ -19,14 +19,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import zm.gov.moh.hie.scp.dto.DispensationMessage;
 import zm.gov.moh.hie.scp.model.DispensationRecord;
-import zm.gov.moh.hie.scp.model.DispensationDrugRecord;
 
 import java.sql.PreparedStatement;
 import java.sql.Types;
-import java.util.ArrayList;
-import java.util.List;
 
-import org.apache.flink.api.common.functions.MapFunction;
 import org.apache.flink.api.common.functions.FlatMapFunction;
 import org.apache.flink.util.Collector;
 
@@ -72,7 +68,7 @@ public class StreamingJob {
 
         SingleOutputStreamOperator<DispensationRecord> records = kafkaStream
                 .filter(s -> !StringUtils.isNullOrWhitespaceOnly(s))
-                .map(new DispensationMapFunction())
+                .flatMap(new DispensationFlatMapFunction())
                 .name("parse-and-flatten")
                 .filter(record -> {
                     if (record == null || record.hmisCode == null) {
@@ -81,8 +77,9 @@ public class StreamingJob {
                         return false;
                     }
 
-                    if (record.drugCount == 0)
+                    if (record.mslDrugId == null) {
                         return false;
+                    }
 
                     // Filter out placeholder values
                     if ("configure-me".equals(record.hmisCode)) {
@@ -97,44 +94,68 @@ public class StreamingJob {
                     if(StringUtils.isNullOrWhitespaceOnly(record.refPrescription))
                         return false;
 
-                    LOG.info("Processing dispensation record from HMIS: {} with {} drugs (MessageId: {})",
-                            record.hmisCode, record.drugCount, record.messageId);
+                    LOG.info("Processing dispensed drug: {} from prescription {} (MessageId: {})",
+                            record.mslDrugId, record.refPrescription, record.messageId);
                     return true;
                 })
                 .name("filter-invalid-records")
                 .disableChaining();
 
-        // Add JdbcSink with batch configuration and UPSERT for unique ref_prescription constraint
+        // Add JdbcSink with batch configuration - one row per dispensed drug
         @SuppressWarnings("deprecation")
         var sink = JdbcSink.sink(
-                "INSERT INTO " + cfg.postgresTable + " (hmis_code, drug_count, arv_drug_count, ref_prescription, " +
-                        "patient_guid, art_number, next_visit_date, transaction_time, dispensation_date) " +
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) " +
-                        "ON CONFLICT (ref_prescription) " +
+                "INSERT INTO " + cfg.postgresTable + " (hmis_code, ref_prescription, message_id, " +
+                        "patient_guid, art_number, next_visit_date, transaction_time, dispensation_date, " +
+                        "clinician_id, msl_drug_id, medication_id, quantity_dispensed, unit_qty_per_dose, " +
+                        "frequency, unit_of_measurement, msh_timestamp, date, \"time\") " +
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_DATE, CURRENT_TIME::time(0)) " +
+                        "ON CONFLICT (ref_prescription, medication_id, msl_drug_id) " +
                         "DO UPDATE SET " +
                         "hmis_code = EXCLUDED.hmis_code, " +
-                        "drug_count = EXCLUDED.drug_count, " +
-                        "arv_drug_count = EXCLUDED.arv_drug_count, " +
-                        "patient_guid = EXCLUDED.patient_guid, " +
-                        "art_number = EXCLUDED.art_number, " +
-                        "next_visit_date = EXCLUDED.next_visit_date, " +
-                        "transaction_time = EXCLUDED.transaction_time, " +
-                        "dispensation_date = EXCLUDED.dispensation_date, " +
+                        "message_id = EXCLUDED.message_id, " +
+                        "quantity_dispensed = EXCLUDED.quantity_dispensed, " +
+                        "unit_qty_per_dose = EXCLUDED.unit_qty_per_dose, " +
+                        "frequency = EXCLUDED.frequency, " +
                         "date = CURRENT_DATE, " +
                         "time = CURRENT_TIME::time(0)",
                 (PreparedStatement statement, DispensationRecord record) -> {
                     statement.setString(1, record.getHmisCode());
-                    // Set drug_count (non-ARV drugs), default to 0 if null
-                    statement.setInt(2, record.getDrugCount() != null ? record.getDrugCount() : 0);
-                    // Set arv_drug_count (ARV/HIV drugs), default to 0 if null
-                    statement.setInt(3, record.getArvDrugCount() != null ? record.getArvDrugCount() : 0);
-                    statement.setString(4, record.getRefPrescription());
-                    statement.setString(5, record.getPatientGuid());
-                    statement.setString(6, record.getArtNumber());
-                    // Parse and set date fields
-                    setDateField(statement, 7, record.getNextVisitDate());
-                    setTimeField(statement, 8, record.getTransactionTime());
-                    setDateField(statement, 9, record.getDispensationDate());
+                    statement.setString(2, record.getRefPrescription());
+                    statement.setString(3, record.getMessageId());
+                    statement.setString(4, record.getPatientGuid());
+                    statement.setString(5, record.getArtNumber());
+                    setDateField(statement, 6, record.getNextVisitDate());
+                    setTimeField(statement, 7, record.getTransactionTime());
+                    setDateField(statement, 8, record.getDispensationDate());
+                    statement.setString(9, record.getClinicianId());
+                    statement.setString(10, record.getMslDrugId());
+                    statement.setString(11, record.getMedicationId());
+                    // quantity_dispensed
+                    if (record.getQuantityDispensed() != null) {
+                        statement.setBigDecimal(12, new java.math.BigDecimal(record.getQuantityDispensed()));
+                    } else {
+                        statement.setNull(12, Types.NUMERIC);
+                    }
+                    // unit_qty_per_dose
+                    if (record.getUnitQtyPerDose() != null) {
+                        statement.setBigDecimal(13, new java.math.BigDecimal(record.getUnitQtyPerDose()));
+                    } else {
+                        statement.setNull(13, Types.NUMERIC);
+                    }
+                    statement.setString(14, record.getFrequency());
+                    statement.setString(15, record.getUnitOfMeasurement());
+                    // msh_timestamp
+                    if (record.getMshTimestamp() != null && !record.getMshTimestamp().isBlank()) {
+                        try {
+                            java.time.LocalDateTime ldt = java.time.LocalDateTime.parse(record.getMshTimestamp(),
+                                java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+                            statement.setTimestamp(16, java.sql.Timestamp.valueOf(ldt));
+                        } catch (Exception e) {
+                            statement.setNull(16, Types.TIMESTAMP);
+                        }
+                    } else {
+                        statement.setNull(16, Types.TIMESTAMP);
+                    }
                 },
                 JdbcExecutionOptions.builder()
                         .withBatchSize(1000)
@@ -150,114 +171,11 @@ public class StreamingJob {
         );
         records.addSink(sink).name("postgres-sink");
 
-        // Add sink for drug records
-        @SuppressWarnings("deprecation")
-        var drugSink = JdbcSink.sink(
-                "INSERT INTO crt.dispensation_drug (ref_prescription, msl_drug_id, quantity_dispensed, " +
-                        "unit_quantity_per_dose, frequency, unit_of_measurement, medication_id) " +
-                        "VALUES (?, ?, ?, ?, ?, ?, ?) " +
-                        "ON CONFLICT (ref_prescription, msl_drug_id) DO UPDATE SET " +
-                        "quantity_dispensed = EXCLUDED.quantity_dispensed, " +
-                        "unit_quantity_per_dose = EXCLUDED.unit_quantity_per_dose, " +
-                        "frequency = EXCLUDED.frequency, " +
-                        "unit_of_measurement = EXCLUDED.unit_of_measurement, " +
-                        "medication_id = EXCLUDED.medication_id",
-                (PreparedStatement statement, DispensationDrugRecord drug) -> {
-                    statement.setString(1, drug.getRefPrescription());
-                    statement.setString(2, drug.getMslDrugId());
-                    setNumericField(statement, 3, drug.getQuantityDispensed());
-                    setNumericField(statement, 4, drug.getUnitQuantityPerDose());
-                    statement.setString(5, drug.getFrequency());
-                    statement.setString(6, drug.getUnitOfMeasurement());
-                    statement.setString(7, drug.getMedicationId());
-                },
-                JdbcExecutionOptions.builder()
-                        .withBatchSize(1000)
-                        .withBatchIntervalMs(200)
-                        .withMaxRetries(5)
-                        .build(),
-                new JdbcConnectionOptions.JdbcConnectionOptionsBuilder()
-                        .withUrl(cfg.jdbcUrl)
-                        .withDriverName("org.postgresql.Driver")
-                        .withUsername(cfg.jdbcUser)
-                        .withPassword(cfg.jdbcPassword)
-                        .build()
-        );
-
-        // Fan out drug records from the filtered records stream
-        DataStream<DispensationDrugRecord> drugRecords = records
-                .flatMap(new DispensationDrugFlatMapFunction())
-                .name("flatten-drugs")
-                .filter(d -> d.getRefPrescription() != null && d.getMslDrugId() != null)
-                .name("filter-invalid-drugs");
-        drugRecords.addSink(drugSink).name("postgres-drug-sink");
-
         env.execute("SC ELMIS Dispensations Pipeline");
     }
 
-    private static DispensationRecord toRecord(String json, ObjectMapper mapper) {
-        try {
-            DispensationMessage msg = mapper.readValue(json, DispensationMessage.class);
-
-            // Extract fields matching the database schema
-            String messageId = msg.msh != null ? msg.msh.messageId : null;
-            String hmisCode = msg.msh != null ? msg.msh.hmisCode : msg.hmisCode; // Use msh.hmisCode first, fall back to root level
-
-            // Calculate drug counts from dispensedDrugs array
-            Integer drugCount = null;      // Count of non-ARV drugs (Essential medicines)
-            Integer arvDrugCount = null;   // Count of ARV drugs only (HIV)
-            List<DispensationDrugRecord> drugs = new ArrayList<>();
-
-            if (msg.dispensedDrugs != null) {
-                // Count non-ARV drugs (Essential medicines)
-                drugCount = (int) msg.dispensedDrugs.stream()
-                        .filter(drug -> drug != null && drug.mslDrugId != null && !drug.mslDrugId.contains("ARV"))
-                        .count();
-
-                // Count ARV drugs specifically (HIV drugs with mslDrugId starting with "ARV")
-                arvDrugCount = (int) msg.dispensedDrugs.stream()
-                        .filter(drug -> drug != null && drug.mslDrugId != null && drug.mslDrugId.contains("ARV"))
-                        .count();
-
-                // Build drug records for each dispensed drug
-                for (DispensationMessage.DispensedDrug drug : msg.dispensedDrugs) {
-                    if (drug != null && drug.mslDrugId != null) {
-                        DispensationDrugRecord drugRecord = new DispensationDrugRecord(
-                                msg.prescriptionUuid,
-                                drug.mslDrugId,
-                                drug.quantityDispensed,
-                                drug.unitQuantityPerDose,
-                                drug.frequency,
-                                drug.unitOfMeasurement,
-                                drug.medicationId
-                        );
-                        drugs.add(drugRecord);
-                    }
-                }
-            }
-
-            // Use prescriptionUuid as reference to prescription
-            String refPrescription = msg.prescriptionUuid;
-
-            // Extract new fields from payload
-            String patientGuid = msg.patientGuid;
-            String artNumber = msg.artNumber;
-            String nextVisitDate = msg.nextVisitDate;
-            String transactionTime = msg.transactionTime;
-            String dispensationDate = msg.dispensationDate;
-
-            return new DispensationRecord(
-                    hmisCode, drugCount, arvDrugCount, refPrescription, messageId,
-                    patientGuid, artNumber, nextVisitDate, transactionTime, dispensationDate, drugs
-            );
-        } catch (JsonProcessingException e) {
-            LOG.error("Failed to parse JSON: {}", json, e);
-            // Return a record with minimal info to avoid pipeline failure
-            return new DispensationRecord(null, null, null, null, null);
-        } catch (Exception e) {
-            LOG.error("Unexpected error processing record: {}", json, e);
-            return new DispensationRecord(null, null, null, null, null);
-        }
+    private static DispensationMessage parseMessage(String json, ObjectMapper mapper) throws JsonProcessingException {
+        return mapper.readValue(json, DispensationMessage.class);
     }
 
     /**
@@ -306,36 +224,49 @@ public class StreamingJob {
     /**
      * Serializable MapFunction to transform JSON strings to DispensationRecord objects
      */
-    public static class DispensationMapFunction implements MapFunction<String, DispensationRecord> {
+    public static class DispensationFlatMapFunction implements FlatMapFunction<String, DispensationRecord> {
         private static final long serialVersionUID = 1L;
-
-        // Transient means this won't be serialized, but will be recreated on each task manager
         private transient ObjectMapper objectMapper;
 
         @Override
-        public DispensationRecord map(String json) throws Exception {
+        public void flatMap(String json, Collector<DispensationRecord> out) throws Exception {
             if (objectMapper == null) {
                 objectMapper = new ObjectMapper()
                         .registerModule(new JavaTimeModule())
                         .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
             }
 
-            return toRecord(json, objectMapper);
-        }
-    }
+            try {
+                DispensationMessage msg = parseMessage(json, objectMapper);
 
-    /**
-     * Serializable FlatMapFunction to emit individual drug records from a DispensationRecord
-     */
-    public static class DispensationDrugFlatMapFunction implements FlatMapFunction<DispensationRecord, DispensationDrugRecord> {
-        private static final long serialVersionUID = 1L;
+                String messageId = msg.msh != null ? msg.msh.messageId : null;
+                String mshTimestamp = msg.msh != null ? msg.msh.timestamp : null;
+                String hmisCode = msg.msh != null ? msg.msh.hmisCode : msg.hmisCode;
+                String refPrescription = msg.prescriptionUuid;
+                String patientGuid = msg.patientGuid;
+                String artNumber = msg.artNumber;
+                String nextVisitDate = msg.nextVisitDate;
+                String transactionTime = msg.transactionTime;
+                String dispensationDate = msg.dispensationDate;
+                String clinicianId = msg.clinician != null ? msg.clinician : msg.clinicianId;
 
-        @Override
-        public void flatMap(DispensationRecord record, Collector<DispensationDrugRecord> out) throws Exception {
-            if (record.getDrugs() != null && !record.getDrugs().isEmpty()) {
-                for (DispensationDrugRecord drug : record.getDrugs()) {
-                    out.collect(drug);
+                if (msg.dispensedDrugs != null && !msg.dispensedDrugs.isEmpty()) {
+                    for (DispensationMessage.DispensedDrug drug : msg.dispensedDrugs) {
+                        if (drug != null && drug.mslDrugId != null) {
+                            DispensationRecord record = new DispensationRecord(
+                                    hmisCode, refPrescription, messageId,
+                                    patientGuid, artNumber, nextVisitDate,
+                                    transactionTime, dispensationDate, clinicianId,
+                                    drug.mslDrugId, drug.medicationId, drug.quantityDispensed,
+                                    drug.unitQuantityPerDose, drug.frequency, drug.unitOfMeasurement,
+                                    mshTimestamp
+                            );
+                            out.collect(record);
+                        }
+                    }
                 }
+            } catch (Exception e) {
+                LOG.error("Error flattening dispensation record: {}", json, e);
             }
         }
     }
