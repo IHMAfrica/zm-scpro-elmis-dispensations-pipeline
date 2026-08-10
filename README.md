@@ -64,7 +64,7 @@ kubectl apply -f k8s/fleet/flink-sessionjob.yaml
 
 # Or direct JAR execution with custom config
 java -jar zm-scpro-elmis-dispensations-pipeline-all.jar \
-  --kafka.bootstrap.servers=broker1:9093,broker2:9093 \
+  --kafka.bootstrap.servers=broker1:0000,broker2:0001 \
   --kafka.topic=dispensations-prime \
   --jdbc.url=jdbc:postgresql://db:5432/hie_manager
 ```
