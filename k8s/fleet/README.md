@@ -54,9 +54,7 @@ spec:
     upgradeMode: stateless
     state: running
     args:
-      # SANITIZED FOR HANDOVER: fill in the real Postgres host, port, and database name below
-      # (or better, remove this and inject via a Secret/ConfigMap instead of a plain CLI arg)
-      - "--jdbc.url=jdbc:postgresql://<DB_HOST>:<DB_PORT>/<DB_NAME>"
+      - "--jdbc.url=jdbc:postgresql://172.16.20.9:35616/hie_manager"
       - "--kafka.group.id=scpro-elmis-dispensations-pipeline"
 ```
 
@@ -68,9 +66,9 @@ spec:
 - `--postgres.table`: Target table (default: `crt.dispensation`)
 
 #### Default Values (built into application)
-- **Kafka Brokers**: `<KAFKA_BROKER_1>:9093,<KAFKA_BROKER_2>:9093,<KAFKA_BROKER_3>:9093` - get the real broker list from the ops/infra team
+- **Kafka Brokers**: `154.120.216.119:9093,102.23.120.153:9093,102.23.123.251:9093`
 - **Kafka Topic**: `dispensations`
-- **Database URL**: `jdbc:postgresql://<DB_HOST>:<DB_PORT>/<DB_NAME>` - get the real host/port/db name from the ops/infra team
+- **Database URL**: `jdbc:postgresql://db-04.smartcare.com:35616/hie_manager`
 - **Consumer Group**: `flink-scpro-elmis-dispensations-consumer`
 
 ### Security
