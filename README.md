@@ -8,7 +8,7 @@ This pipeline processes dispensation events from the ELMIS system, extracting ke
 
 ## Architecture
 
-- **Source**: Kafka topic `dispensations` 
+- **Source**: Kafka topic `dispensations-prime` 
 - **Processing**: Apache Flink streaming job with batch processing
 - **Sink**: PostgreSQL `crt.dispensation` table
 - **Deployment**: Kubernetes via Flink Kubernetes Operator
@@ -48,11 +48,11 @@ CREATE INDEX idx_dispensation_ref_prescription
 
 ### Environment Variables
 - `KAFKA_BOOTSTRAP_SERVERS`: Kafka broker addresses
-- `KAFKA_TOPIC`: Topic name (default: `dispensations`)
+- `KAFKA_TOPIC`: Topic name (default: `dispensations-prime`)
 - `KAFKA_GROUP_ID`: Consumer group ID (default: `flink-scpro-elmis-dispensations-consumer`)
 - `KAFKA_SASL_USERNAME`: Kafka authentication username
 - `KAFKA_SASL_PASSWORD`: Kafka authentication password
-- `JDBC_URL`: PostgreSQL connection URL (default: `jdbc:postgresql://db-04.smartcare.com:35616/hie_manager`)
+- `JDBC_URL`: PostgreSQL connection URL (e.g. `jdbc:postgresql://<DB_HOST>:<DB_PORT>/<DB_NAME>` - get the real value from the ops/infra team, do not hardcode it)
 - `JDBC_USER`: Database username
 - `JDBC_PASSWORD`: Database password
 - `POSTGRES_TABLE`: Target table (default: `crt.dispensation`)
@@ -65,7 +65,7 @@ kubectl apply -f k8s/fleet/flink-sessionjob.yaml
 # Or direct JAR execution with custom config
 java -jar zm-scpro-elmis-dispensations-pipeline-all.jar \
   --kafka.bootstrap.servers=broker1:9093,broker2:9093 \
-  --kafka.topic=dispensations \
+  --kafka.topic=dispensations-prime \
   --jdbc.url=jdbc:postgresql://db:5432/hie_manager
 ```
 
